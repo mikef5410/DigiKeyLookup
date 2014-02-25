@@ -1,0 +1,84 @@
+#!/usr/bin/perl
+#
+
+#Lookup a part at Digikey by manufacturer partnumber or keyword
+#
+
+#MPN search lead-free, rohs, and in-stock
+#http://www.digikey.com/scripts/dksearch/dksus.dll?mpart=C1608X7R1V105K080AC&mnonly=0&newproducts=0&ColumnSort=0&page=1&stock=1&pbfree=1&rohs=1&quantity=0&ptm=0&fid=0&pageSize=25
+
+#Keyword search for part that's lead-free, rohs, and in stock ...
+#http://www.digikey.com/scripts/dksearch/dksus.dll?vendor=0&keywords=C1608X7R1V105K&stock=1&pbfree=1&rohs=1
+#
+# Look for <table id=productTable ...>
+# the next <thead><tr> ....</tr> is the headings.
+# then there's a <tr> ...</tr> with ascend/descend sort buttons
+# then there are <tr>...</tr>'s of product data.
+use Mojo::UserAgent;
+use Data::Dumper qw(Dumper);
+
+my $kwordsearch="http://www.digikey.com/scripts/dksearch/dksus.dll?vendor=0&keywords=%s&stock=1&pbfree=1&rohs=1";
+my $pn=shift(@ARGV);
+
+my $ua = Mojo::UserAgent->new;
+#Fake a browser or Digi-Key won't answer us ...
+$ua->name("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:21.0) Gecko/20130331 Firefox/21.0");
+
+my $srch=sprintf($kwordsearch,$pn);
+# Fetch web search result. Mojo parses it into a DOM representation automatically
+my $tx = $ua->get($srch);
+
+#Now start thrashing around the DOM looking for our data....
+
+#Find the productTable
+my $prodTable=$tx->res->dom->at('table#productTable');
+
+# Extract headings
+# <thead> has two rows ... row1 is text names, row2 is sorting arrows
+my $head=$prodTable->at('thead')->children('tr')->first;
+#print($head->content_xml);
+
+#Get an array of the column names...
+my $colheads=$head->find('th')->pluck('all_text');
+
+#Now let's find the data we need
+#Figure out column numbers for the data I'm interested in
+my $digikeyPNix=0; #ix=>array index
+my $MPNix=0;
+my $MFRix=0;
+my $descix=0;
+my $minqtyix=0;
+my $availqtyix=0;
+my $priceix=0;
+for (my $j=0; $j<=scalar(@$colheads); $j++) {
+  my $name=$colheads->[$j];
+  $ColNumbers{$name}=$j;  #squirrel column name => array index in a hash
+  $digikeyPNix=$j if ($name=~/Digi-Key Part Number/);
+  $MPNix=$j if ($name=~/Manufacturer Part Number/);
+  $MFRix=$j if ($name=~/^Manufacturer$/);
+  $descix=$j if ($name=~/Description/);
+  $minqtyix=$j if ($name=~/Minimum Quantity/);
+  $availqtyix=$j if ($name=~/Quantity Available/);
+  $priceix=$j if ($name=~/Unit Price USD/);
+}
+#Done with the table header
+
+#Now the table body and rows in it...
+my $bodyrows=$prodTable->at('tbody')->children('tr');
+
+
+# Visit all rows of the product table to get relevent data
+for my $e ($bodyrows->each) {
+  my $rowitems=$e->find('td')->pluck('all_text');
+
+  #Look for P/N for single quantity that has a price...
+  my $minqty=$rowitems->[$minqtyix];
+  my $price=$rowitems->[$priceix];
+
+  if ($minqty == 1 && $price > 0) {
+    my $dpn=$rowitems->[$digikeyPNix];
+    my $mpn=$rowitems->[$MPNix];
+    my $mfr=$rowitems->[$MFRix];
+    printf("$dpn|$mpn|$mfr|$price\n");
+  }  
+}
